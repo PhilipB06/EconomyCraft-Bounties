@@ -1,0 +1,26 @@
+def target = project.mcTarget
+def platforms = (rootProject.findProperty("filter_platforms") ?: "fabric,neoforge")
+        .split(',').collect { it.trim() }
+
+architectury {
+    common(platforms)
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir "src/${target.obfuscated ? 'obfuscated' : 'unobfuscated'}/java"
+        }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${target.mc}"
+
+    if (target.obfuscated) {
+        mappings loom.officialMojangMappings()
+        modCompileOnly rootProject.ext.economyCraftDependency("fabric", target)
+    } else {
+        compileOnly rootProject.ext.economyCraftDependency("fabric", target)
+    }
+}

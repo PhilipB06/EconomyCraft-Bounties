@@ -1,0 +1,25 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url "https://maven.fabricmc.net/" }
+        maven { url "https://maven.architectury.dev/" }
+        maven { url "https://maven.neoforged.net/releases" }
+        mavenCentral()
+    }
+}
+
+plugins {
+    id "org.gradle.toolchains.foojay-resolver-convention" version "1.0.0"
+}
+
+rootProject.name = "economycraft_bounties"
+
+def raw = gradle.startParameter.projectProperties.get("filter_platforms")
+if (raw == null || raw.trim().isEmpty()) {
+    raw = System.getProperty("filter_platforms", "fabric,neoforge")
+}
+def enabled = raw.split(",").collect { it.trim() }.findAll { it }
+
+include("common")
+if (enabled.contains("fabric")) include("fabric")
+if (enabled.contains("neoforge")) include("neoforge")

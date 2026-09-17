@@ -1,0 +1,7 @@
+{
+  "pvp_balance_loss_percentage": 0.10,
+  "minimum_bounty": 1,
+  "allow_self_bounties": true,
+  "announce_bounty_placement": true,
+  "announce_bounty_claim": true
+}

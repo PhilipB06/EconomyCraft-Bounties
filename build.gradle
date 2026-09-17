@@ -1,0 +1,243 @@
+import org.gradle.internal.os.OperatingSystem
+
+plugins {
+    id "dev.architectury.loom-no-remap" version "1.17.487" apply false
+    id "dev.architectury.loom" version "1.17.487" apply false
+    id "architectury-plugin" version "3.5.170"
+    id "com.gradleup.shadow" version "9.3.1" apply false
+}
+
+apply plugin: "jvm-toolchains"
+
+architectury {
+    minecraft = project.minecraft_version
+}
+
+allprojects {
+    group = rootProject.maven_group
+    version = rootProject.mod_version
+}
+
+ext.mcTargets = [
+        [mc: "1.21.1", minecraftPredicate: "1.21.1", fabricApi: "0.116.17+1.21.1", neoforge: "21.1.250", neoforgeLineLo: "21.1", neoforgeLineHi: "21.2", obfuscated: true, javaVersion: 21],
+        [mc: "1.21.11", fabricApi: "0.141.6+1.21.11", neoforge: "21.11.45", neoforgeLineLo: "21.11", neoforgeLineHi: "21.12", obfuscated: true, javaVersion: 21],
+        [mc: "26.1.2", fabricApi: "0.155.3+26.1.2", neoforge: "26.1.2.109", neoforgeLineLo: "26.1", neoforgeLineHi: "26.2"],
+        [mc: "26.2", fabricApi: "0.160.0+26.2", neoforge: "26.2.0.88", neoforgeLineLo: "26.2", neoforgeLineHi: "26.3"],
+        [mc: "26.3", fabricApi: "0.160.5+26.3", neoforge: "26.3.0.3-beta", neoforgeLineLo: "26.3", neoforgeLineHi: "26.4"]
+]
+
+ext.resolveMcTarget = { String mc ->
+    def target = ext.mcTargets.find { it.mc == mc }
+    if (target == null) throw new GradleException("Unsupported minecraft_version '${mc}'")
+    target
+}
+
+ext.mcTaskVersion = { String version ->
+    def parts = version.tokenize('.')
+    if (parts.size() < 3) return version
+    "${parts[0]}.${parts[1]}.${String.format('%02d', parts[2] as int)}"
+}
+
+ext.mcRange = { target ->
+    def parts = target.mc.tokenize('.')
+    if (target.obfuscated) {
+        def upper = new ArrayList<>(parts)
+        upper[-1] = ((upper[-1] as int) + 1).toString()
+        return [target.mc, upper.join('.')]
+    }
+    def major = parts[0] as int
+    def minor = parts[1] as int
+    [target.mc, "${major}.${minor + 1}".toString()]
+}
+
+ext.economyCraftDependency = { String platform, target ->
+    def specific = rootProject.findProperty("economycraft_${platform}_jar")
+    def shared = rootProject.findProperty("economycraft_jar")
+    if (specific != null || shared != null) {
+        return rootProject.files((specific ?: shared).toString())
+    }
+    "maven.modrinth:economycraft:${rootProject.economycraft_version}-${platform},${target.mc}"
+}
+
+subprojects {
+    def mc = (rootProject.findProperty("minecraft_version") ?: rootProject.minecraft_version).toString()
+    def target = rootProject.ext.resolveMcTarget(mc)
+
+    apply plugin: target.obfuscated ? "dev.architectury.loom" : "dev.architectury.loom-no-remap"
+    apply plugin: "architectury-plugin"
+    apply plugin: "maven-publish"
+    ext.mcTarget = target
+
+    base {
+        archivesName = "${rootProject.archives_name}-${project.name}-${rootProject.mod_version}_${mc}"
+    }
+    tasks.withType(Jar).configureEach { archiveVersion = "" }
+
+    if (target.obfuscated) {
+        loom { silentMojangMappingsLicense() }
+    }
+
+    repositories {
+        maven { url "https://maven.fabricmc.net/" }
+        maven { url "https://maven.architectury.dev/" }
+        maven { url "https://maven.neoforged.net/releases" }
+        maven { url "https://api.modrinth.com/maven" }
+        mavenCentral()
+    }
+
+    def javaVersion = (target.javaVersion ?: 25) as int
+    java {
+        sourceCompatibility = JavaVersion.toVersion(javaVersion)
+        targetCompatibility = JavaVersion.toVersion(javaVersion)
+        toolchain { languageVersion = JavaLanguageVersion.of(javaVersion) }
+        withSourcesJar()
+    }
+    tasks.withType(JavaCompile).configureEach { options.release = javaVersion }
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                artifactId = base.archivesName.get()
+                from components.java
+            }
+        }
+    }
+}
+
+def wrapper = OperatingSystem.current().isWindows()
+        ? ["cmd", "/c", new File(rootProject.projectDir, "gradlew.bat").absolutePath]
+        : [new File(rootProject.projectDir, "gradlew").absolutePath]
+
+def collectReleaseJars = { String platform, String label, String mc ->
+    def jars = file("${rootProject.projectDir}/${platform}/build/libs").listFiles()?.findAll {
+        it.name.endsWith("_${mc}.jar") && !it.name.contains("-raw") && !it.name.contains("dev-shadow")
+    } ?: []
+    if (jars.isEmpty()) throw new GradleException("No ${label} release jar was produced for ${mc}")
+    def destination = file("${rootProject.projectDir}/build/${platform}/${mc}")
+    delete destination
+    copy { from jars; into destination }
+
+    def localMods = file("${rootProject.projectDir}/local_servers/${platform}/${mc}/mods")
+    if (localMods.isDirectory()) {
+        localMods.listFiles()?.findAll {
+            it.name.startsWith("${rootProject.archives_name}-${platform}-") && it.name.endsWith(".jar")
+        }?.each { it.delete() }
+        copy { from jars; into localMods }
+        println "Deployed ${label} ${mc} jar to ${localMods}"
+    } else {
+        println "${localMods} does not exist; skipped local-server deployment."
+    }
+}
+
+def fabricBuildTasks = []
+def neoForgeBuildTasks = []
+ext.mcTargets.each { target ->
+    def suffix = ext.mcTaskVersion(target.mc)
+    def previousFabricTask = fabricBuildTasks.isEmpty() ? null : fabricBuildTasks.last()
+    def previousNeoForgeTask = neoForgeBuildTasks.isEmpty() ? null : neoForgeBuildTasks.last()
+    def serverJavaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of((target.javaVersion ?: 25) as int)
+    }
+
+    def fabricTask = tasks.register("buildFabric_${suffix}", Exec) {
+        group = "build/fabric"
+        workingDir rootProject.projectDir
+        commandLine(wrapper + [
+                "--no-daemon", "-Pfilter_platforms=fabric",
+                "-Pminecraft_version=${target.mc}",
+                "-Pfabric_api_version=${target.fabricApi}",
+                ":fabric:clean", ":fabric:build"
+        ])
+        doLast { collectReleaseJars("fabric", "Fabric", target.mc) }
+    }
+    if (previousFabricTask != null) fabricTask.configure { mustRunAfter previousFabricTask }
+    fabricBuildTasks.add(fabricTask)
+
+    tasks.register("runLocalFabric_${suffix}", Exec) {
+        group = "run/fabric"
+        description = "Build, deploy and run the local Fabric server for Minecraft ${target.mc}"
+        dependsOn fabricTask
+
+        def serverDir = file("${rootProject.projectDir}/local_servers/fabric/${target.mc}")
+        workingDir serverDir
+        args "-Xmx4G", "-jar", "fabric-server-launch.jar", "nogui"
+        standardInput = System.in
+        doFirst {
+            if (!new File(serverDir, "fabric-server-launch.jar").isFile()) {
+                throw new GradleException("Fabric server is not provisioned at ${serverDir}")
+            }
+            executable serverJavaLauncher.get().executablePath.asFile.absolutePath
+        }
+    }
+
+    def neoForgeTask = tasks.register("buildNeoForge_${suffix}", Exec) {
+        group = "build/neoforge"
+        workingDir rootProject.projectDir
+        commandLine(wrapper + [
+                "--no-daemon", "-Pfilter_platforms=neoforge",
+                "-Pminecraft_version=${target.mc}",
+                "-Pneoforge_version=${target.neoforge}",
+                "-Pneoforge_line_lo=${target.neoforgeLineLo}",
+                "-Pneoforge_line_hi=${target.neoforgeLineHi}",
+                ":neoforge:clean", ":neoforge:build"
+        ])
+        doLast { collectReleaseJars("neoforge", "NeoForge", target.mc) }
+    }
+    if (previousNeoForgeTask != null) neoForgeTask.configure { mustRunAfter previousNeoForgeTask }
+    neoForgeBuildTasks.add(neoForgeTask)
+
+    tasks.register("runLocalNeoForge_${suffix}", Exec) {
+        group = "run/neoforge"
+        description = "Build, deploy and run the local NeoForge server for Minecraft ${target.mc}"
+        dependsOn neoForgeTask
+
+        def serverDir = file("${rootProject.projectDir}/local_servers/neoforge/${target.mc}")
+        workingDir serverDir
+        standardInput = System.in
+        if (OperatingSystem.current().isWindows()) {
+            commandLine "cmd", "/c", new File(serverDir, "run.bat").absolutePath
+        } else {
+            commandLine "bash", new File(serverDir, "run.sh").absolutePath
+        }
+        doFirst {
+            def launchScript = new File(serverDir, OperatingSystem.current().isWindows() ? "run.bat" : "run.sh")
+            if (!launchScript.isFile()) {
+                throw new GradleException("NeoForge server is not provisioned at ${serverDir}")
+            }
+            def javaBin = serverJavaLauncher.get().executablePath.asFile.parentFile.absolutePath
+            environment "PATH", javaBin + File.pathSeparator + (System.getenv("PATH") ?: "")
+        }
+    }
+}
+
+neoForgeBuildTasks.each { neoForgeTask ->
+    neoForgeTask.configure { mustRunAfter fabricBuildTasks }
+}
+
+tasks.register("printBuildTaskName") {
+    group = "build"
+    description = "Prints the build task name for -Pmc_game=<version> -Pplatform=<fabric|neoforge>"
+    doLast {
+        def mc = project.findProperty("mc_game")?.toString()
+        if (mc == null) throw new GradleException("Set -Pmc_game=<minecraft version>")
+        rootProject.ext.resolveMcTarget(mc)
+        def platform = (project.findProperty("platform") ?: "fabric").toString()
+        def prefix = platform == "neoforge" ? "buildNeoForge_" : "buildFabric_"
+        println prefix + rootProject.ext.mcTaskVersion(mc)
+    }
+}
+
+tasks.register("buildAllFabric") {
+    group = "build"
+    dependsOn tasks.matching { it.name.startsWith("buildFabric_") }
+}
+
+tasks.register("buildAllNeoForge") {
+    group = "build"
+    dependsOn tasks.matching { it.name.startsWith("buildNeoForge_") }
+}
+
+tasks.register("buildAll") {
+    group = "build"
+    dependsOn "buildAllFabric", "buildAllNeoForge"
+}

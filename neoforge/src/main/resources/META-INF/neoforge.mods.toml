@@ -1,0 +1,33 @@
+modLoader = "javafml"
+loaderVersion = "[1,)"
+license = "GPL-3.0"
+
+[[mods]]
+modId = "economycraft_bounties"
+version = "${version}"
+displayName = "EconomyCraft Bounties"
+authors = "ReaZip"
+description = '''
+Bounties and PvP money-loss add-on for EconomyCraft.
+'''
+
+[[dependencies.economycraft_bounties]]
+modId = "minecraft"
+type = "required"
+versionRange = "[${mcLo},${mcHi})"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.economycraft_bounties]]
+modId = "neoforge"
+type = "required"
+versionRange = "[${nfLo},${nfHi})"
+ordering = "NONE"
+side = "BOTH"
+
+[[dependencies.economycraft_bounties]]
+modId = "economycraft"
+type = "required"
+versionRange = "[${economycraftVersion},)"
+ordering = "AFTER"
+side = "BOTH"

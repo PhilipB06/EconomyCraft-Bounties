@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "economycraft_bounties",
+  "version": "${version}",
+  "name": "EconomyCraft Bounties",
+  "description": "Bounties and PvP money-loss add-on for EconomyCraft.",
+  "authors": ["ReaZip"],
+  "license": "GPL-3.0",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.reazip.economycraft.bounties.fabric.EconomyCraftBountiesFabric"]
+  },
+  "depends": {
+    "minecraft": "${mcPredicate}",
+    "fabricloader": ">=0.15.0",
+    "fabric-api": "*",
+    "economycraft": ">=${economycraftVersion}"
+  }
+}
